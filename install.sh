@@ -740,6 +740,7 @@ for required_file in \
     rollback.sh \
     apply-release.sh \
     update-from-github.sh \
+    ops/crewlinectl \
     docker/configure_environment.py
 do
     if [[ ! -f "$staging/$required_file" ]]; then
@@ -768,7 +769,8 @@ chmod 0750 \
     "$project_directory/rollback.sh" \
     "$project_directory/apply-release.sh" \
     "$project_directory/update-from-github.sh" \
-    "$project_directory/enable-https.sh"
+    "$project_directory/enable-https.sh" \
+    "$project_directory/ops/crewlinectl"
 
 echo
 echo "Installing Crewline $release_tag..."

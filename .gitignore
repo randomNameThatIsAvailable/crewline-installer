@@ -1,4 +1,5 @@
 *
 !.gitignore
+!.gitattributes
 !install.sh
 !README.md
