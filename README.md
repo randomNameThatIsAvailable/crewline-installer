@@ -19,8 +19,14 @@ certificates, databases, media, or backups.
 Run as `root` on a clean Debian 13 VPS:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/randomNameThatIsAvailable/crewline-installer/v1.0.0/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/randomNameThatIsAvailable/crewline-installer/main/install.sh)
 ```
+
+This command always downloads the current installer from `main`. The installer
+then automatically selects the newest complete published Crewline release,
+including release candidates.
+
+No installer version or Crewline release version must be supplied.
 
 Use process substitution exactly as shown. Do not use:
 
