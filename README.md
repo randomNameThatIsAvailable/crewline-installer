@@ -42,8 +42,9 @@ The installer:
 5. Selects the newest complete Crewline release, including release candidates.
 6. Downloads and verifies the release archive.
 7. Rejects unsafe archive paths and archive links.
-8. Runs Crewline's private installation script.
-9. Preserves credentials under `/root/.config/crewline`.
+8. Configures Crewline for `ceremlin.mirrorcloudcenter.com`.
+9. Runs Crewline's private installation script.
+10. Preserves credentials under `/root/.config/crewline`.
 
 The installer does not configure:
 

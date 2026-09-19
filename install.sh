@@ -8,6 +8,7 @@ configuration_directory="/root/.config/crewline"
 repository_token_file="$configuration_directory/github-token"
 package_token_file="$configuration_directory/ghcr-token"
 project_directory="/opt/crewline"
+crewline_domain="ceremlin.mirrorcloudcenter.com"
 
 temporary_directory=""
 
@@ -68,6 +69,66 @@ architecture="$(dpkg --print-architecture)"
 if [[ "$architecture" != "amd64" ]]; then
     printf 'Unsupported architecture: %s\n' "$architecture" >&2
     echo "Crewline currently requires Debian amd64." >&2
+    exit 1
+fi
+
+existing_installation_reasons=()
+
+if [[ -e "$project_directory/.env" ]] \
+    || [[ -L "$project_directory/.env" ]]
+then
+    existing_installation_reasons+=(
+        "$project_directory/.env exists"
+    )
+fi
+
+if [[ -d "$project_directory" ]] \
+    && [[ -n "$(
+        find \
+            "$project_directory" \
+            -mindepth 1 \
+            -maxdepth 1 \
+            -print \
+            -quit
+    )" ]]
+then
+    existing_installation_reasons+=(
+        "$project_directory is not empty"
+    )
+fi
+
+if command -v docker >/dev/null 2>&1; then
+    if docker volume inspect \
+        crewline_database_data \
+        >/dev/null 2>&1
+    then
+        existing_installation_reasons+=(
+            "Docker volume crewline_database_data exists"
+        )
+    fi
+
+    if docker ps \
+        --all \
+        --quiet \
+        --filter "label=com.docker.compose.project=crewline" |
+        grep --quiet .
+    then
+        existing_installation_reasons+=(
+            "Crewline Docker containers exist"
+        )
+    fi
+fi
+
+if (( ${#existing_installation_reasons[@]} > 0 )); then
+    echo "An existing Crewline installation was detected:" >&2
+
+    printf '  - %s\n' \
+        "${existing_installation_reasons[@]}" >&2
+
+    echo >&2
+    echo "This bootstrap installer only performs clean installations." >&2
+    echo "Use the existing Crewline update procedure instead:" >&2
+    echo "  bash /opt/crewline/update-from-github.sh" >&2
     exit 1
 fi
 
@@ -518,59 +579,7 @@ obtain_package_token() {
 obtain_repository_token
 obtain_package_token
 
-domain="${1:-}"
-
-if [[ -z "$domain" ]]; then
-    read \
-        -r \
-        -p "Crewline hostname, without https:// or port: " \
-        domain
-fi
-
-domain="$(
-    printf '%s' "$domain" |
-        tr '[:upper:]' '[:lower:]' |
-        xargs
-)"
-
-python3 - "$domain" <<'PY'
-import re
-import sys
-
-domain = sys.argv[1]
-
-if (
-    len(domain) > 253
-    or "." not in domain
-    or any(
-        not re.fullmatch(
-            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
-            label,
-        )
-        for label in domain.split(".")
-    )
-):
-    raise SystemExit(
-        "Enter a valid hostname without a URL, port, or path."
-    )
-PY
-
-if [[ -e "$project_directory/.env" ]] \
-    || docker volume inspect crewline_database_data >/dev/null 2>&1
-then
-    echo "An existing Crewline installation was detected." >&2
-    echo "Use /opt/crewline/update-from-github.sh for updates." >&2
-    exit 1
-fi
-
-if [[ -e "$project_directory" ]] \
-    && [[ -n "$(find "$project_directory" -mindepth 1 -maxdepth 1 -print -quit)" ]]
-then
-    echo "The target directory exists and is not empty:" >&2
-    echo "  $project_directory" >&2
-    echo "Inspect it before retrying installation." >&2
-    exit 1
-fi
+domain="$crewline_domain"
 
 write_authentication_config "$repository_token"
 
