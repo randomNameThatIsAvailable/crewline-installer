@@ -2,6 +2,14 @@
 set -Eeuo pipefail
 umask 077
 
+requested_release=""
+if [[ $# != 0 ]]; then
+    [[ $# == 2 && "$1" == --release && "$2" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || {
+        echo "Usage: install.sh [--release TAG]" >&2; exit 1;
+    }
+    requested_release="$2"
+fi
+
 repository="randomNameThatIsAvailable/crewline"
 github_username="randomNameThatIsAvailable"
 configuration_directory="/root/.config/crewline"
@@ -47,6 +55,14 @@ for name in release.env target archive.sha256 installer.sha256 firewall-owner; d
         fi
     done
 done
+
+if [[ -n "$requested_release" && -f "$recovery_directory/release.env" ]]; then
+    recovery_release="$(sed -n 's/^CREWLINE_RELEASE=//p' "$recovery_directory/release.env")"
+    [[ "$requested_release" == "$recovery_release" ]] || {
+        echo "Requested release differs from the frozen recovery release; host configuration was not changed." >&2
+        exit 1
+    }
+fi
 
 temporary_directory=""
 nginx_site_changed=false
@@ -700,22 +716,32 @@ write_authentication_config "$repository_token"
 
 echo "Reading published Crewline releases..."
 
-curl \
-    --config "$authentication_config" \
-    --fail \
-    --silent \
-    --show-error \
-    --location \
-    --connect-timeout 10 \
-    --max-time 120 \
-    --header "Accept: application/vnd.github+json" \
-    --header "X-GitHub-Api-Version: 2022-11-28" \
-    --output "$release_metadata" \
-    "https://api.github.com/repos/$repository/releases?per_page=100"
-
 download_asset() {
     curl --config "$authentication_config" --fail --silent --show-error --location --connect-timeout 10 --max-time 600 --header 'Accept: application/octet-stream' --header 'X-GitHub-Api-Version: 2022-11-28' --output "$2" "$1"
 }
+
+# An explicit first-install target never falls back to a newer release.
+# Recovery retains its existing target and rejects a conflicting request above.
+selection_tag="$requested_release"
+if [[ -f "$recovery_directory/release.env" ]]; then
+    selection_tag="$(sed -n 's/^CREWLINE_RELEASE=//p' "$recovery_directory/release.env")"
+    [[ "$selection_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || exit 1
+fi
+if [[ -n "$selection_tag" ]]; then
+    curl --config "$authentication_config" --fail --silent --show-error --connect-timeout 10 --max-time 120 --header 'Accept: application/vnd.github+json' --header 'X-GitHub-Api-Version: 2022-11-28' --output "$release_metadata" "https://api.github.com/repos/$repository/releases/tags/$selection_tag"
+    python3 - "$release_metadata" "$selection_tag" >"$release_selection" <<'PY'
+import json, sys
+from pathlib import Path
+release = json.loads(Path(sys.argv[1]).read_text())
+if not isinstance(release, dict):
+    raise SystemExit("Invalid release metadata.")
+release_id = release.get("id")
+if release.get("draft") or release.get("tag_name") != sys.argv[2] or type(release_id) is not int or release_id <= 0:
+    raise SystemExit("Requested release is not a published matching release.")
+print(f"{release_id}|{sys.argv[2]}")
+PY
+else
+    curl --config "$authentication_config" --fail --silent --show-error --location --connect-timeout 10 --max-time 120 --header 'Accept: application/vnd.github+json' --header 'X-GitHub-Api-Version: 2022-11-28' --output "$release_metadata" "https://api.github.com/repos/$repository/releases?per_page=100"
 python3 - "$release_metadata" >"$release_selection" <<'PY'
 import json, re, sys
 from pathlib import Path
@@ -730,16 +756,8 @@ for release in json.loads(Path(sys.argv[1]).read_text()):
 for _, release_id, tag in sorted(candidates, reverse=True):
     print(f"{release_id}|{tag}")
 PY
-release_tag=""
-# Once selected, the release is frozen for recovery, even if a newer one appears.
-if [[ -f "$recovery_directory/release.env" ]]; then
-    release_tag="$(sed -n 's/^CREWLINE_RELEASE=//p' "$recovery_directory/release.env")"
-    [[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || exit 1
-    curl --config "$authentication_config" --fail --silent --show-error --connect-timeout 10 --max-time 120 --header 'Accept: application/vnd.github+json' --output "$temporary_directory/pinned-release.json" "https://api.github.com/repos/$repository/releases/tags/$release_tag"
-    candidate_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$temporary_directory/pinned-release.json")"
-    printf '%s|%s\n' "$candidate_id" "$release_tag" >"$release_selection"
-    release_tag=""
 fi
+release_tag=""
 while IFS='|' read -r candidate_id candidate_tag; do
     assets_path="$temporary_directory/assets-$candidate_id.json"
     curl --config "$authentication_config" --fail --silent --show-error --location --connect-timeout 10 --max-time 120 --header 'Accept: application/vnd.github+json' --header 'X-GitHub-Api-Version: 2022-11-28' --output "$assets_path" "https://api.github.com/repos/$repository/releases/$candidate_id/assets?per_page=100"
@@ -786,7 +804,14 @@ PY
         break
     fi
 done <"$release_selection"
-[[ -n "$release_tag" ]] || { echo "No complete host-nginx-http-v1 / resume-v1 release is published. Publish the Slice 2 Crewline source first." >&2; exit 1; }
+if [[ -z "$release_tag" ]]; then
+    if [[ -n "$selection_tag" ]]; then
+        echo "Requested release is incomplete or incompatible; no alternative release will be selected." >&2
+    else
+        echo "No complete host-nginx-http-v1 / resume-v1 release is published. Publish the Slice 2 Crewline source first." >&2
+    fi
+    exit 1
+fi
 expected_target="$(printf '%s\n' "domain=$crewline_domain" 'gateway=127.0.0.1:18080' 'http=80' 'https=443' 'panel=127.0.0.1:2053' 'tailscale_https=9443')"
 if [[ -f "$recovery_directory/release.env" ]]; then
     cmp --silent "$manifest_path" "$recovery_directory/release.env" || { echo "Pinned release manifest changed; recovery stopped without altering the installation." >&2; exit 1; }

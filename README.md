@@ -22,7 +22,9 @@ installer revision have been published. Publishing is a separate human action.
 
 The release publisher supplies two public values: an approved 40-character
 installer commit SHA and the SHA-256 of `install.sh` at that exact commit.
-Replace both placeholders below with those values (not a branch name or tag):
+Replace the commit/checksum placeholders below with those values (not a branch
+name or tag), and `APPROVED_CREWLINE_RELEASE_TAG` with the application release
+whose complete assets and manifest contracts were verified before deployment:
 
 ```bash
 (
@@ -35,19 +37,24 @@ Replace both placeholders below with those values (not a branch name or tag):
     trap 'exit 129' HUP
     curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --connect-timeout 10 --max-time 120 --output "$entry_directory/entry.sh" https://raw.githubusercontent.com/randomNameThatIsAvailable/crewline-installer/APPROVED_COMMIT_SHA/entry.sh
     test -s "$entry_directory/entry.sh"
-    bash "$entry_directory/entry.sh" APPROVED_COMMIT_SHA INSTALL_SH_SHA256
+    bash "$entry_directory/entry.sh" APPROVED_COMMIT_SHA INSTALL_SH_SHA256 --release APPROVED_CREWLINE_RELEASE_TAG
 )
 ```
 
 `entry.sh` downloads the approved immutable installer over HTTPS, verifies its
 expected SHA-256 before executing it, and preserves the interactive terminal.
 The entry script itself must also be fetched from that approved immutable revision.
-The installer automatically selects the newest complete published Crewline release
-compatible with both `host-nginx-http-v1` and `resume-v1`,
-including release candidates.
+With `--release TAG`, the installer fetches only that exact published Crewline
+release. It requires complete assets and both `host-nginx-http-v1` and `resume-v1`
+contracts, and fails rather than selecting an alternative when the requested
+release is missing, incomplete or incompatible. A conflicting recovery tag is
+rejected before host changes.
 
-No Crewline release version must be supplied. The public installer revision is
-deliberately pinned, rather than silently running whatever happens to be on `main`.
+The release option remains optional for existing callers: without it, a fresh
+installation automatically selects the newest complete compatible published
+release, including release candidates. Use an explicit verified tag for the first
+VPS deployment. The public installer revision is deliberately pinned, rather
+than silently running whatever happens to be on `main`.
 
 Download the entry script successfully before executing it, as shown above.
 This prevents a failed download from appearing to be a successful empty Bash run.
@@ -68,7 +75,7 @@ The installer:
 2. Enables UFW default-deny inbound for IPv4/IPv6 before Docker or nginx installation, preserving the effective live SSH port and configured SSH listeners. It does not reset an unrelated firewall policy or modify SSH configuration.
 3. Installs Docker Engine and Docker Compose when necessary.
 4. Requests and validates read-only GitHub credentials.
-5. Fetches release asset lists and selects the newest complete `host-nginx-http-v1` / `resume-v1` Crewline release, including release candidates. Legacy or non-resumable releases are skipped.
+5. Fetches the requested release when `--release TAG` is supplied; otherwise selects the newest complete `host-nginx-http-v1` / `resume-v1` Crewline release, including release candidates. Legacy or non-resumable releases are skipped only during automatic selection; an explicitly requested incompatible release fails.
 6. Downloads and verifies the release archive.
 7. Rejects unsafe archive paths and archive links.
 8. Configures Crewline for `ceremlin.mirrorcloudcenter.com`.
@@ -147,7 +154,8 @@ bootstrap ownership record permits recovery of its own interrupted installation.
 Its state is separate from `.crewline-deployment/current.env`, which remains
 owned by Crewline's deployment tooling.
 
-For recovery, rerun the same approved installer revision and checksum. Do not
+For recovery, rerun the same approved installer revision, checksum and explicit
+application tag when supplied. Do not
 delete `.env`, token files, Docker volumes, or bootstrap state. If a pinned release
 manifest or checksum changes, recovery stops for investigation instead of changing
 the target halfway through installation.
@@ -156,8 +164,9 @@ Recovery also checks the original installer content checksum. Existing legacy
 `bootstrap/release.env`, `bootstrap/target` and `bootstrap/archive.sha256` records
 are retained and checked before promotion to a complete `bootstrap/release-pin`.
 Uncommitted `release-pin.pending.*` directories are ignored. An interrupted first
-download before the pin is committed may select a newer compatible release on retry;
-application files and services have not yet been installed at that point.
+download before the pin is committed may select a newer compatible release on retry
+only during automatic selection; an explicit tag remains the requested target.
+Application files and services have not yet been installed at that point.
 If a later normal update has changed the deployed release, bootstrap recovery stops
 instead of copying the older pinned release over it.
 

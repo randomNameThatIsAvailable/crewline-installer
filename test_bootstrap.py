@@ -1,6 +1,10 @@
 """Local source-contract checks; these do not install anything or prove VPS success."""
 from pathlib import Path
+import json
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parent
@@ -21,7 +25,7 @@ class BootstrapContractTests(unittest.TestCase):
         self.assertNotIn("ufw reset", self.source)
 
     def test_pinned_recovery_and_separate_locks(self):
-        self.assertIn('releases/tags/$release_tag', self.source)
+        self.assertIn('releases/tags/$selection_tag', self.source)
         self.assertIn('cmp --silent "$manifest_path" "$recovery_directory/release.env"', self.source)
         self.assertIn('cmp --silent "$checksum_path" "$recovery_directory/archive.sha256"', self.source)
         self.assertIn("/run/crewline-bootstrap.lock", self.source)
@@ -58,6 +62,45 @@ class BootstrapContractTests(unittest.TestCase):
         self.assertLess(self.entry.index('sha256sum --check'), self.entry.index('bash "$temporary_directory/install.sh"'))
         self.assertNotIn('/main/install.sh', self.entry)
         self.assertIn('-t 0 && -t 1', self.entry)
+
+    def test_explicit_release_is_validated_and_forwarded_before_host_changes(self):
+        self.assertLess(self.source.index('Usage: install.sh [--release TAG]'), self.source.index('$(id -u)'))
+        self.assertLess(self.source.index('Requested release differs from the frozen recovery release'), self.source.index('install -d -m 0700'))
+        self.assertIn('installer_arguments=(--release "$4")', self.entry)
+        self.assertIn('bash "$temporary_directory/install.sh" "${installer_arguments[@]}"', self.entry)
+        self.assertLess(self.entry.index('installer_arguments=(--release "$4")'), self.entry.index('curl --proto'))
+        self.assertIn('no alternative release will be selected', self.source)
+
+    def test_explicit_release_metadata_accepts_only_the_published_exact_target(self):
+        program = re.search(
+            r'python3 - "\$release_metadata" "\$selection_tag" >"\$release_selection" <<\x27PY\x27\n(.*?)\nPY',
+            self.source, re.S,
+        ).group(1)
+        target = 'v0.1.0-rc.28'
+        cases = (
+            ({'id': 123, 'tag_name': target, 'draft': False}, True),
+            ({'id': 123, 'tag_name': target, 'draft': True}, False),
+            ({'id': 123, 'tag_name': 'v0.1.0-rc.29', 'draft': False}, False),
+            ({'id': 0, 'tag_name': target, 'draft': False}, False),
+            ({'id': True, 'tag_name': target, 'draft': False}, False),
+            ({'id': '123', 'tag_name': target, 'draft': False}, False),
+            ([], False),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = Path(directory) / 'release.json'
+            for value, accepted in cases:
+                with self.subTest(metadata=value):
+                    metadata.write_text(json.dumps(value), encoding='utf-8')
+                    result = subprocess.run(
+                        [sys.executable, '-B', '-c', program, str(metadata), target],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if accepted:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout, f'123|{target}\n')
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertEqual(result.stdout, '')
 
     def test_acme_rollback_remains_armed_until_https_activation(self):
         start = self.source.index('nginx_site_changed=true')
