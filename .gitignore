@@ -3,3 +3,5 @@
 !.gitattributes
 !install.sh
 !README.md
+!entry.sh
+!test_bootstrap.py
